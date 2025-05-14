@@ -1,6 +1,7 @@
 import uuid
 import bcrypt
 import jwt
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
@@ -9,22 +10,25 @@ from pydantic_schemas.users_schemas import StudentCreate, TeacherCreate, UserLog
 from middleware.auth_middleware import auth_middleware
 from typing import Dict, Union
 
+# Load environment variables (only for local)
+from dotenv import load_dotenv
+load_dotenv()
+
 router = APIRouter()
+
+JWT_SECRET = os.getenv("JWT_SECRET", "fallback_secret")  # fallback just in case
 
 # Register a new student
 @router.post("/student/signup", response_model=StudentResponse, status_code=201)
 def signup_student(student: StudentCreate, db: Session = Depends(get_db)):
-    # Check if email already exists
     existing_student = db.query(Student).filter(Student.email == student.email).first()
     if existing_student:
         raise HTTPException(400, "This email already exists")
 
-    # Also check if email exists in teachers table
     existing_teacher = db.query(Teacher).filter(Teacher.email == student.email).first()
     if existing_teacher:
         raise HTTPException(400, "This email already exists")
 
-    # Hash password before saving
     hashed_pw = bcrypt.hashpw(student.password.encode('utf-8'), bcrypt.gensalt())
 
     student_db = Student(
@@ -44,17 +48,14 @@ def signup_student(student: StudentCreate, db: Session = Depends(get_db)):
 # Register a new teacher
 @router.post("/teacher/signup", response_model=TeacherResponse, status_code=201)
 def signup_teacher(teacher: TeacherCreate, db: Session = Depends(get_db)):
-    # Check if email already exists
     existing_teacher = db.query(Teacher).filter(Teacher.email == teacher.email).first()
     if existing_teacher:
         raise HTTPException(400, "This email already exists")
 
-    # Also check if email exists in students table
     existing_student = db.query(Student).filter(Student.email == teacher.email).first()
     if existing_student:
         raise HTTPException(400, "This email already exists")
 
-    # Hash password before saving
     hashed_pw = bcrypt.hashpw(teacher.password.encode('utf-8'), bcrypt.gensalt())
 
     teacher_db = Teacher(
@@ -86,7 +87,7 @@ def login_student(user: UserLogin, db: Session = Depends(get_db)):
     token = jwt.encode({
         'id': student.id,
         'user_type': 'student'
-    }, 'education_app_secret', algorithm='HS256')
+    }, JWT_SECRET, algorithm='HS256')
 
     return {
         'token': token, 
@@ -112,7 +113,7 @@ def login_teacher(user: UserLogin, db: Session = Depends(get_db)):
     token = jwt.encode({
         'id': teacher.id,
         'user_type': 'teacher'
-    }, 'education_app_secret', algorithm='HS256')
+    }, JWT_SECRET, algorithm='HS256')
 
     return {
         'token': token, 

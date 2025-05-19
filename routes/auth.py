@@ -14,6 +14,7 @@ from pydantic_schemas.forgot_password_schemas import ForgotPasswordRequest, Veri
 from middleware.auth_middleware import auth_middleware
 from middleware.email_utils import send_otp_email
 from typing import Dict, Union
+from pydantic import EmailStr
 
 # Load environment variables (only for local)
 from dotenv import load_dotenv
@@ -177,43 +178,48 @@ def current_user_data(db: Session = Depends(get_db), auth_dict=Depends(auth_midd
     else:
         raise HTTPException(400, "Invalid user type")
 
-# Forgot password - send OTP
+# Forgot password - send OTP (no user_type required)
+from fastapi import BackgroundTasks
+
 @router.post('/forgot-password')
-def forgot_password(request: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    user = None
-    if request.user_type == 'student':
-        user = db.query(Student).filter(Student.email == request.email).first()
-    elif request.user_type == 'teacher':
-        user = db.query(Teacher).filter(Teacher.email == request.email).first()
+def forgot_password(request: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    email = request.get('email')
+    if not email:
+        raise HTTPException(400, 'Email is required')
+    # Try to find user in both tables
+    user = db.query(Student).filter(Student.email == email).first()
+    if not user:
+        user = db.query(Teacher).filter(Teacher.email == email).first()
     if not user:
         raise HTTPException(404, 'User not found')
 
     otp = ''.join(random.choices(string.digits, k=6))
-    otp_store[(request.email, request.user_type)] = {
+    otp_store[email] = {
         'otp': otp,
         'expires': time.time() + 600  # 10 minutes
     }
-    background_tasks.add_task(send_otp_email, request.email, otp)
+    background_tasks.add_task(send_otp_email, email, otp)
     return {'message': 'OTP sent to your email'}
 
-# Reset password using OTP
+# Reset password using OTP (no user_type required)
 @router.post('/reset-password')
-def reset_password(request: VerifyOtpRequest, db: Session = Depends(get_db)):
-    key = (request.email, request.user_type)
-    otp_data = otp_store.get(key)
-    if not otp_data or otp_data['otp'] != request.otp or time.time() > otp_data['expires']:
+def reset_password(request: dict, db: Session = Depends(get_db)):
+    email = request.get('email')
+    otp = request.get('otp')
+    new_password = request.get('new_password')
+    if not email or not otp or not new_password:
+        raise HTTPException(400, 'Email, OTP, and new password are required')
+    otp_data = otp_store.get(email)
+    if not otp_data or otp_data['otp'] != otp or time.time() > otp_data['expires']:
         raise HTTPException(400, 'Invalid or expired OTP')
-
-    user = None
-    if request.user_type == 'student':
-        user = db.query(Student).filter(Student.email == request.email).first()
-    elif request.user_type == 'teacher':
-        user = db.query(Teacher).filter(Teacher.email == request.email).first()
+    # Try to find user in both tables
+    user = db.query(Student).filter(Student.email == email).first()
+    if not user:
+        user = db.query(Teacher).filter(Teacher.email == email).first()
     if not user:
         raise HTTPException(404, 'User not found')
-
-    hashed_pw = bcrypt.hashpw(request.new_password.encode('utf-8'), bcrypt.gensalt())
+    hashed_pw = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
     user.password = hashed_pw
     db.commit()
-    del otp_store[key]
+    del otp_store[email]
     return {'message': 'Password reset successful'}
